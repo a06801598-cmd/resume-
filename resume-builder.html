@@ -7,9 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-<!-- Word export: use the UMD build so `docx` is available as a global in a plain <script> tag -->
-<script src="https://unpkg.com/docx@8.5.0/build/index.umd.cjs" onerror="window.__libErrors=(window.__libErrors||[]).concat('docx library failed to load from unpkg.com')"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.min.js" onerror="window.__libErrors=(window.__libErrors||[]).concat('FileSaver library failed to load from cdnjs')"></script>
+<!-- Word export libraries are loaded dynamically below (with CDN fallbacks) -->
 
 <!-- Firebase (compat, loaded once the user connects their own project) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js" onerror="window.__libErrors=(window.__libErrors||[]).concat('Firebase app SDK failed to load')"></script>
@@ -649,9 +647,16 @@ function detectImageType(dataUrl){
   return t === 'jpeg' ? 'jpg' : t;
 }
 
+let coreLibsPromise = null;
+function ensureCoreLibraries(){
+  if(!coreLibsPromise) coreLibsPromise = loadCoreLibraries().then(errs=>{ showLibErrors(errs); return errs; });
+  return coreLibsPromise;
+}
+
 async function buildDocxBlob(){
+  const loadErrors = await ensureCoreLibraries();
   if(typeof docx === 'undefined'){
-    throw new Error('The docx library did not load. Check your internet connection or that unpkg.com is reachable, then reload the page.');
+    throw new Error((loadErrors && loadErrors[0]) || 'The docx library did not load. Check your internet connection, then reload the page.');
   }
   const { Document, Packer, Paragraph, TextRun, ImageRun, BorderStyle, AlignmentType } = docx;
   const s = state;
@@ -851,19 +856,57 @@ async function saveToFirebase(){
   }
 }
 
+/* ---------------- Robust library loading with CDN fallbacks ---------------- */
+function loadScriptOnce(url){
+  return new Promise((resolve, reject)=>{
+    const s = document.createElement('script');
+    s.src = url;
+    s.onload = () => resolve(url);
+    s.onerror = () => reject(new Error('Failed: ' + url));
+    document.head.appendChild(s);
+  });
+}
+async function loadFromSources(sources){
+  let lastErr;
+  for(const url of sources){
+    try{ await loadScriptOnce(url); return true; }
+    catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error('All sources failed');
+}
+async function loadCoreLibraries(){
+  const errs = [];
+  try{
+    await loadFromSources([
+      'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.cjs',
+      'https://unpkg.com/docx@8.5.0/build/index.umd.cjs',
+      'https://cdn.jsdelivr.net/npm/docx@8.2.0/build/index.umd.cjs'
+    ]);
+  }catch(e){ errs.push('docx library (Word export) could not load from any CDN — check your internet connection.'); }
+
+  try{
+    await loadFromSources([
+      'https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.min.js'
+    ]);
+  }catch(e){ errs.push('FileSaver library (Word export) could not load from any CDN.'); }
+
+  return errs;
+}
+
 /* ---------------- Init ---------------- */
-function showLibErrors(){
+function showLibErrors(extraErrors){
   const banner = document.getElementById('libErrorBanner');
-  const missing = [];
-  if(typeof docx === 'undefined') missing.push('docx library (Word export) did not load.');
-  if(typeof saveAs === 'undefined') missing.push('FileSaver library (Word export) did not load.');
+  const missing = extraErrors ? [...extraErrors] : [];
   if(typeof firebase === 'undefined') missing.push('Firebase SDK did not load.');
   if(window.__libErrors && window.__libErrors.length){
     missing.push(...window.__libErrors);
   }
   if(missing.length){
     banner.className='lib-error-banner';
-    banner.innerHTML = '⚠ ' + missing.join(' · ') + ' — this usually means the CDN was blocked (ad blocker, browser privacy mode, or offline). Try a different browser or disable content blockers for this page, then reload.';
+    banner.innerHTML = '⚠ ' + missing.join(' · ') + ' — try reloading, switching networks (e.g. mobile data vs WiFi), or opening this page in a different browser.';
+  } else {
+    banner.className=''; banner.innerHTML='';
   }
 }
 
@@ -876,7 +919,7 @@ addEducation();
 addCourse();
 setTemplate('ledger');
 autoConnectFirebase();
-setTimeout(showLibErrors, 800);
+ensureCoreLibraries();
 </script>
 </body>
 </html>
