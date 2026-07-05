@@ -770,11 +770,138 @@ function wImageParagraph(rId, widthEmu, heightEmu){
 </w:drawing></w:r></w:p>`;
 }
 
+function wCell(contentXml, opts){
+  opts = opts || {};
+  let tcPr = `<w:tcW w:w="${opts.width||0}" w:type="dxa"/>`;
+  if(opts.fill) tcPr += `<w:shd w:val="clear" w:fill="${opts.fill}"/>`;
+  const m = opts.margin!=null ? opts.margin : 160;
+  tcPr += `<w:tcMar><w:top w:w="${m}" w:type="dxa"/><w:left w:w="${m}" w:type="dxa"/><w:bottom w:w="${m}" w:type="dxa"/><w:right w:w="${m}" w:type="dxa"/></w:tcMar><w:vAlign w:val="top"/>`;
+  return `<w:tc><w:tcPr>${tcPr}</w:tcPr>${contentXml}</w:tc>`;
+}
+
 function sectionHeadingPara(text){
   return wPara(wRun(text.toUpperCase(), { bold:true, size:20, color:'16233D', font:'Courier New' }), { borderBottom:'DDD6C8', spacingBefore:240, spacingAfter:120 });
 }
 function bulletPara(text){
   return wPara(wRun('•  ' + text, { size:21 }), { indentLeft:360 });
+}
+function wTable(colWidths, rowsXml){
+  const grid = colWidths.map(w=>`<w:gridCol w:w="${w}"/>`).join('');
+  const totalWidth = colWidths.reduce((a,b)=>a+b,0);
+  return `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/><w:tblBorders><w:top w:val="none"/><w:left w:val="none"/><w:bottom w:val="none"/><w:right w:val="none"/><w:insideH w:val="none"/><w:insideV w:val="none"/></w:tblBorders><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${rowsXml}</w:tbl><w:p/>`;
+}
+
+function experienceParas(s, opts){
+  opts = opts || {};
+  const roleColor = opts.roleColor || '16233D';
+  const orgColor = opts.orgColor || 'B98B4E';
+  const dateColor = opts.dateColor || '5B6472';
+  const out = [];
+  s.experience.forEach(x=>{
+    out.push(wPara(
+      wRun(`${x.role||'Role'} — `, { bold:true, size:22, color:roleColor }) +
+      wRun(x.company||'Company', { bold:true, size:22, color:orgColor }) +
+      wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:dateColor }),
+      { spacingBefore:100 }
+    ));
+    bulletsToArray(x.bullets).forEach(b=>out.push(bulletPara(b)));
+  });
+  return out;
+}
+function educationParas(s, opts){
+  opts = opts || {};
+  const degColor = opts.degColor || '16233D';
+  const orgColor = opts.orgColor || 'B98B4E';
+  const dateColor = opts.dateColor || '5B6472';
+  const out = [];
+  s.education.forEach(x=>{
+    out.push(wPara(
+      wRun(`${x.degree||'Degree'} — `, { bold:true, size:22, color:degColor }) +
+      wRun(x.school||'School', { bold:true, size:22, color:orgColor }) +
+      wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:dateColor }),
+      { spacingBefore:100 }
+    ));
+    if(x.details) out.push(bulletPara(x.details));
+  });
+  return out;
+}
+function coursesParas(s, opts){
+  opts = opts || {};
+  const codeColor = opts.codeColor || 'B98B4E';
+  const nameColor = opts.nameColor || '16233D';
+  const issuerColor = opts.issuerColor || '5B6472';
+  return s.courses.map((x,i)=> wPara(
+    wRun(`CRS.${String(i+1).padStart(2,'0')}   `, { font:'Courier New', size:18, color:codeColor }) +
+    wRun(`${x.name||'Course'} — `, { bold:true, size:21, color:nameColor }) +
+    wRun(`${x.issuer||''}, ${x.date||''}`, { size:21, color:issuerColor }),
+    { spacingBefore:60 }
+  ));
+}
+
+/* ---- LEDGER: single column, transcript style ---- */
+function buildLedgerBody(s, contact, hasImage){
+  const paras = [];
+  if(hasImage) paras.push(wImageParagraph('rId1', 1005840, 1005840));
+  paras.push(wPara(wRun(s.fullName || 'Your Name', { bold:true, size:44, font:'Georgia' }), { align:'center' }));
+  paras.push(wPara(wRun(s.jobTitle || '', { size:22, color:'B98B4E' }), { align:'center', spacingAfter:120 }));
+  if(contact.length){
+    paras.push(wPara(wRun(contact.join('   ·   '), { size:20, color:'5B6472' }), { align:'center', borderTop:'16233D', borderBottom:'16233D', spacingBefore:120, spacingAfter:200 }));
+  }
+  if(s.summary) paras.push(wPara(wRun(s.summary, { size:22 }), { spacingAfter:200 }));
+  if(s.experience.length){ paras.push(sectionHeadingPara('Experience')); paras.push(...experienceParas(s)); }
+  if(s.education.length){ paras.push(sectionHeadingPara('Education')); paras.push(...educationParas(s)); }
+  if(s.skills.length){ paras.push(sectionHeadingPara('Skills')); paras.push(wPara(wRun(s.skills.join('   ·   '), { size:21 }))); }
+  if(s.courses.length){ paras.push(sectionHeadingPara('Courses & Certifications')); paras.push(...coursesParas(s)); }
+  return paras.join('\n');
+}
+
+/* ---- MERIDIAN: dark sidebar + white main column ---- */
+function buildMeridianBody(s, contact, hasImage){
+  const sideW = 2800, mainW = 6560;
+  let side = '';
+  if(hasImage) side += wImageParagraph('rId1', 819150, 819150);
+  side += wPara(wRun(s.fullName || 'Your Name', { bold:true, size:30, color:'F7F4EE', font:'Georgia' }), { align:'center' });
+  side += wPara(wRun(s.jobTitle || '', { size:17, color:'B98B4E' }), { align:'center', spacingAfter:160 });
+  contact.forEach(c=> side += wPara(wRun(c, { size:16, color:'D9DDE6' }), { spacingAfter:60 }));
+  if(s.skills.length){
+    side += wPara(wRun('SKILLS', { bold:true, size:16, color:'B98B4E', font:'Courier New' }), { spacingBefore:220, spacingAfter:80 });
+    side += wPara(wRun(s.skills.join('  ·  '), { size:17, color:'D9DDE6' }));
+  }
+  if(s.courses.length){
+    side += wPara(wRun('COURSES & CERTIFICATIONS', { bold:true, size:16, color:'B98B4E', font:'Courier New' }), { spacingBefore:220, spacingAfter:80 });
+    s.courses.forEach(x=>{
+      side += wPara(wRun(x.name||'Course', { bold:true, size:16, color:'F7F4EE' }) + wRun(` — ${x.issuer||''}, ${x.date||''}`, { size:16, color:'D9DDE6' }), { spacingAfter:60 });
+    });
+  }
+
+  let main = '';
+  if(s.summary) main += wPara(wRun(s.summary, { size:22 }), { spacingAfter:200 });
+  if(s.experience.length){ main += sectionHeadingPara('Experience'); main += experienceParas(s).join(''); }
+  if(s.education.length){ main += sectionHeadingPara('Education'); main += educationParas(s).join(''); }
+  if(!main) main = wPara('');
+
+  const row = `<w:tr>${wCell(side, { width:sideW, fill:'16233D', margin:200 })}${wCell(main, { width:mainW, margin:220 })}</w:tr>`;
+  return wTable([sideW, mainW], row);
+}
+
+/* ---- FOUNDRY: bold header band, single column below ---- */
+function buildFoundryBody(s, contact, hasImage){
+  let band = '';
+  if(hasImage) band += wImageParagraph('rId1', 731520, 731520);
+  band += wPara(wRun(s.fullName || 'Your Name', { bold:true, size:34, color:'F7F4EE', font:'Georgia' }), { align:'center' });
+  band += wPara(wRun(s.jobTitle || '', { size:20, color:'B98B4E' }), { align:'center', spacingAfter:80 });
+  if(contact.length) band += wPara(wRun(contact.join('   ·   '), { size:17, color:'DCE3D9' }), { align:'center' });
+
+  const bandTable = wTable([9360], `<w:tr>${wCell(band, { width:9360, fill:'33463A', margin:260 })}</w:tr>`);
+
+  const paras = [];
+  if(s.summary) paras.push(wPara(wRun(s.summary, { size:22 }), { spacingAfter:200, spacingBefore:200 }));
+  if(s.experience.length){ paras.push(sectionHeadingPara('Experience')); paras.push(...experienceParas(s, { roleColor:'16233D', orgColor:'33463A' })); }
+  if(s.education.length){ paras.push(sectionHeadingPara('Education')); paras.push(...educationParas(s, { degColor:'16233D', orgColor:'33463A' })); }
+  if(s.skills.length){ paras.push(sectionHeadingPara('Skills')); paras.push(wPara(wRun(s.skills.join('   ·   '), { size:21 }))); }
+  if(s.courses.length){ paras.push(sectionHeadingPara('Courses & Certifications')); paras.push(...coursesParas(s, { codeColor:'33463A' })); }
+
+  return bandTable + paras.join('\n');
 }
 
 async function dataUrlToUint8(dataUrl){
@@ -793,7 +920,6 @@ function detectImageExt(dataUrl){
 async function buildDocxBlob(){
   const s = state;
   const contact = contactParts();
-  const paras = [];
   let imageBytes=null, imageExt='png', imageContentType='image/png';
 
   if(s.photo){
@@ -801,66 +927,18 @@ async function buildDocxBlob(){
       imageBytes = await dataUrlToUint8(s.photo);
       const info = detectImageExt(s.photo);
       imageExt = info.ext; imageContentType = info.contentType;
-      paras.push(wImageParagraph('rId1', 1005840, 1005840));
     }catch(e){ console.error('Photo embed failed, continuing without it:', e); imageBytes=null; }
   }
 
-  paras.push(wPara(wRun(s.fullName || 'Your Name', { bold:true, size:44, font:'Georgia' }), { align:'center' }));
-  paras.push(wPara(wRun(s.jobTitle || '', { size:22, color:'B98B4E' }), { align:'center', spacingAfter:120 }));
-  if(contact.length){
-    paras.push(wPara(wRun(contact.join('   ·   '), { size:20, color:'5B6472' }), { align:'center', borderTop:'16233D', borderBottom:'16233D', spacingBefore:120, spacingAfter:200 }));
-  }
-  if(s.summary){
-    paras.push(wPara(wRun(s.summary, { size:22 }), { spacingAfter:200 }));
-  }
-
-  if(s.experience.length){
-    paras.push(sectionHeadingPara('Experience'));
-    s.experience.forEach(x=>{
-      paras.push(wPara(
-        wRun(`${x.role||'Role'} — `, { bold:true, size:22 }) +
-        wRun(x.company||'Company', { bold:true, size:22, color:'B98B4E' }) +
-        wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:'5B6472' }),
-        { spacingBefore:100 }
-      ));
-      bulletsToArray(x.bullets).forEach(b=>paras.push(bulletPara(b)));
-    });
-  }
-
-  if(s.education.length){
-    paras.push(sectionHeadingPara('Education'));
-    s.education.forEach(x=>{
-      paras.push(wPara(
-        wRun(`${x.degree||'Degree'} — `, { bold:true, size:22 }) +
-        wRun(x.school||'School', { bold:true, size:22, color:'B98B4E' }) +
-        wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:'5B6472' }),
-        { spacingBefore:100 }
-      ));
-      if(x.details) paras.push(bulletPara(x.details));
-    });
-  }
-
-  if(s.skills.length){
-    paras.push(sectionHeadingPara('Skills'));
-    paras.push(wPara(wRun(s.skills.join('   ·   '), { size:21 })));
-  }
-
-  if(s.courses.length){
-    paras.push(sectionHeadingPara('Courses & Certifications'));
-    s.courses.forEach((x,i)=>{
-      paras.push(wPara(
-        wRun(`CRS.${String(i+1).padStart(2,'0')}   `, { font:'Courier New', size:18, color:'B98B4E' }) +
-        wRun(`${x.name||'Course'} — `, { bold:true, size:21 }) +
-        wRun(`${x.issuer||''}, ${x.date||''}`, { size:21, color:'5B6472' }),
-        { spacingBefore:60 }
-      ));
-    });
-  }
+  let bodyXml;
+  if(s.template === 'meridian') bodyXml = buildMeridianBody(s, contact, !!imageBytes);
+  else if(s.template === 'foundry') bodyXml = buildFoundryBody(s, contact, !!imageBytes);
+  else bodyXml = buildLedgerBody(s, contact, !!imageBytes);
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
 <w:body>
-${paras.join('\n')}
+${bodyXml}
 <w:sectPr>
   <w:pgSz w:w="12240" w:h="15840"/>
   <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
