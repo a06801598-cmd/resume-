@@ -396,7 +396,7 @@ body{
     </div>
 
     <div class="actions">
-      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.doc)</button>
+      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.docx)</button>
       <button class="btn-secondary" onclick="saveToFirebase()">Save to Firebase</button>
       <div class="status-msg" id="statusMsg"></div>
     </div>
@@ -633,87 +633,271 @@ function renderPreview(){
   }
 }
 
-/* ---------------- Word export (self-contained, no external library) ----------------
-   This builds a Word-compatible HTML document (the same technique Word itself uses
-   when you "Save As > Web Page"). It opens perfectly in Word, Google Docs, and WPS —
-   fully editable — without depending on any CDN, so it can never fail from a blocked
-   script the way the old docx.js-based version could. */
+/* ---------------- Word export: real .docx, hand-built, zero dependencies ----------------
+   A .docx file is just a ZIP archive of XML files. We build both the ZIP container and
+   the WordprocessingML XML ourselves, so there is no CDN/library to ever fail to load. */
 
 function escXml(s){
   return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function wordSectionHeading(text){
-  return `<h2 style="font-family:'Courier New',monospace;font-size:11pt;letter-spacing:1px;text-transform:uppercase;color:#16233D;border-bottom:1px solid #DDD6C8;padding-bottom:4px;margin:20px 0 10px;">${escXml(text)}</h2>`;
+/* ---- Minimal ZIP writer (stored/uncompressed entries — fully valid per ZIP spec) ---- */
+const CRC_TABLE = (()=>{
+  const table = new Uint32Array(256);
+  for(let n=0;n<256;n++){
+    let c=n;
+    for(let k=0;k<8;k++){ c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); }
+    table[n]=c>>>0;
+  }
+  return table;
+})();
+function crc32(bytes){
+  let c = 0xFFFFFFFF;
+  for(let i=0;i<bytes.length;i++){ c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8); }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function writeUint32LE(arr, offset, val){ arr[offset]=val&255; arr[offset+1]=(val>>>8)&255; arr[offset+2]=(val>>>16)&255; arr[offset+3]=(val>>>24)&255; }
+function writeUint16LE(arr, offset, val){ arr[offset]=val&255; arr[offset+1]=(val>>>8)&255; }
+
+function buildZip(files){
+  // files: [{ name: 'word/document.xml', data: Uint8Array }, ...]
+  const encoder = new TextEncoder();
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  files.forEach(file=>{
+    const nameBytes = encoder.encode(file.name);
+    const data = file.data;
+    const crc = crc32(data);
+    const dosTime = 0, dosDate = 0x21; // fixed arbitrary date; not functionally important
+
+    const local = new Uint8Array(30 + nameBytes.length);
+    writeUint32LE(local,0,0x04034b50);
+    writeUint16LE(local,4,20);
+    writeUint16LE(local,6,0);
+    writeUint16LE(local,8,0); // store, no compression
+    writeUint16LE(local,10,dosTime);
+    writeUint16LE(local,12,dosDate);
+    writeUint32LE(local,14,crc);
+    writeUint32LE(local,18,data.length);
+    writeUint32LE(local,22,data.length);
+    writeUint16LE(local,26,nameBytes.length);
+    writeUint16LE(local,28,0);
+    local.set(nameBytes,30);
+
+    localParts.push(local, data);
+
+    const central = new Uint8Array(46 + nameBytes.length);
+    writeUint32LE(central,0,0x02014b50);
+    writeUint16LE(central,4,20);
+    writeUint16LE(central,6,20);
+    writeUint16LE(central,8,0);
+    writeUint16LE(central,10,0);
+    writeUint16LE(central,12,dosTime);
+    writeUint16LE(central,14,dosDate);
+    writeUint32LE(central,16,crc);
+    writeUint32LE(central,20,data.length);
+    writeUint32LE(central,24,data.length);
+    writeUint16LE(central,28,nameBytes.length);
+    writeUint16LE(central,30,0);
+    writeUint16LE(central,32,0);
+    writeUint16LE(central,34,0);
+    writeUint16LE(central,36,0);
+    writeUint32LE(central,38,0);
+    writeUint32LE(central,42,offset);
+    central.set(nameBytes,46);
+    centralParts.push(central);
+
+    offset += local.length + data.length;
+  });
+
+  const centralStart = offset;
+  let centralSize = 0;
+  centralParts.forEach(p=>centralSize+=p.length);
+
+  const eocd = new Uint8Array(22);
+  writeUint32LE(eocd,0,0x06054b50);
+  writeUint16LE(eocd,4,0);
+  writeUint16LE(eocd,6,0);
+  writeUint16LE(eocd,8,files.length);
+  writeUint16LE(eocd,10,files.length);
+  writeUint32LE(eocd,12,centralSize);
+  writeUint32LE(eocd,16,centralStart);
+  writeUint16LE(eocd,20,0);
+
+  return new Blob([...localParts, ...centralParts, eocd], { type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
 }
 
-function buildWordHtml(){
+/* ---- WordprocessingML (document.xml) builders ---- */
+function wRun(text, opts){
+  opts = opts || {};
+  let rPr = '';
+  if(opts.bold) rPr += '<w:b/>';
+  if(opts.color) rPr += `<w:color w:val="${opts.color}"/>`;
+  if(opts.size) rPr += `<w:sz w:val="${opts.size}"/><w:szCs w:val="${opts.size}"/>`;
+  if(opts.font) rPr += `<w:rFonts w:ascii="${opts.font}" w:hAnsi="${opts.font}"/>`;
+  return `<w:r>${rPr?`<w:rPr>${rPr}</w:rPr>`:''}<w:t xml:space="preserve">${escXml(text)}</w:t></w:r>`;
+}
+function wPara(runsXml, opts){
+  opts = opts || {};
+  let pPr = '';
+  if(opts.align) pPr += `<w:jc w:val="${opts.align}"/>`;
+  if(opts.borderTop) pPr += `<w:pBdr><w:top w:val="single" w:sz="4" w:space="4" w:color="${opts.borderTop}"/></w:pBdr>`;
+  if(opts.borderBottom) pPr += `<w:pBdr><w:bottom w:val="single" w:sz="4" w:space="4" w:color="${opts.borderBottom}"/></w:pBdr>`;
+  if(opts.spacingBefore || opts.spacingAfter) pPr += `<w:spacing w:before="${opts.spacingBefore||0}" w:after="${opts.spacingAfter||0}"/>`;
+  if(opts.indentLeft) pPr += `<w:ind w:left="${opts.indentLeft}"/>`;
+  return `<w:p>${pPr?`<w:pPr>${pPr}</w:pPr>`:''}${runsXml}</w:p>`;
+}
+function wImageParagraph(rId, widthEmu, heightEmu){
+  return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>
+  <wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">
+    <wp:extent cx="${widthEmu}" cy="${heightEmu}"/>
+    <wp:docPr id="1" name="Photo"/>
+    <a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+          <pic:nvPicPr><pic:cNvPr id="0" name="Photo"/><pic:cNvPicPr/></pic:nvPicPr>
+          <pic:blipFill><a:blip r:embed="${rId}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+          <pic:spPr>
+            <a:xfrm><a:off x="0" y="0"/><a:ext cx="${widthEmu}" cy="${heightEmu}"/></a:xfrm>
+            <a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom>
+          </pic:spPr>
+        </pic:pic>
+      </a:graphicData>
+    </a:graphic>
+  </wp:inline>
+</w:drawing></w:r></w:p>`;
+}
+
+function sectionHeadingPara(text){
+  return wPara(wRun(text.toUpperCase(), { bold:true, size:20, color:'16233D', font:'Courier New' }), { borderBottom:'DDD6C8', spacingBefore:240, spacingAfter:120 });
+}
+function bulletPara(text){
+  return wPara(wRun('•  ' + text, { size:21 }), { indentLeft:360 });
+}
+
+async function dataUrlToUint8(dataUrl){
+  const res = await fetch(dataUrl);
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
+function detectImageExt(dataUrl){
+  const match = /^data:image\/(png|jpeg|jpg|gif|bmp);/i.exec(dataUrl || '');
+  if(!match) return { ext:'png', contentType:'image/png' };
+  const t = match[1].toLowerCase();
+  if(t==='jpg'||t==='jpeg') return { ext:'jpg', contentType:'image/jpeg' };
+  return { ext:t, contentType:'image/'+t };
+}
+
+async function buildDocxBlob(){
   const s = state;
   const contact = contactParts();
-  let body = '';
+  const paras = [];
+  let imageBytes=null, imageExt='png', imageContentType='image/png';
 
   if(s.photo){
-    body += `<div style="text-align:center;margin-bottom:14px;"><img src="${s.photo}" width="110" height="110" style="border-radius:50%;object-fit:cover;"></div>`;
+    try{
+      imageBytes = await dataUrlToUint8(s.photo);
+      const info = detectImageExt(s.photo);
+      imageExt = info.ext; imageContentType = info.contentType;
+      paras.push(wImageParagraph('rId1', 1005840, 1005840));
+    }catch(e){ console.error('Photo embed failed, continuing without it:', e); imageBytes=null; }
   }
 
-  body += `<h1 style="text-align:center;font-family:Georgia,serif;font-size:26pt;margin:0;color:#16233D;">${escXml(s.fullName||'Your Name')}</h1>`;
-  body += `<p style="text-align:center;font-family:'Courier New',monospace;font-size:10.5pt;letter-spacing:1px;text-transform:uppercase;color:#B98B4E;margin:6px 0 12px;">${escXml(s.jobTitle||'')}</p>`;
-
+  paras.push(wPara(wRun(s.fullName || 'Your Name', { bold:true, size:44, font:'Georgia' }), { align:'center' }));
+  paras.push(wPara(wRun(s.jobTitle || '', { size:22, color:'B98B4E' }), { align:'center', spacingAfter:120 }));
   if(contact.length){
-    body += `<p style="text-align:center;font-size:10pt;color:#5B6472;border-top:1px solid #16233D;border-bottom:1px solid #16233D;padding:8px 0;margin:0 0 16px;">${contact.map(escXml).join('&nbsp;&nbsp;·&nbsp;&nbsp;')}</p>`;
+    paras.push(wPara(wRun(contact.join('   ·   '), { size:20, color:'5B6472' }), { align:'center', borderTop:'16233D', borderBottom:'16233D', spacingBefore:120, spacingAfter:200 }));
   }
   if(s.summary){
-    body += `<p style="font-size:11pt;line-height:1.5;color:#222;margin:0 0 16px;">${escXml(s.summary)}</p>`;
+    paras.push(wPara(wRun(s.summary, { size:22 }), { spacingAfter:200 }));
   }
 
   if(s.experience.length){
-    body += wordSectionHeading('Experience');
+    paras.push(sectionHeadingPara('Experience'));
     s.experience.forEach(x=>{
-      body += `<p style="margin:10px 0 2px;font-size:11pt;"><b>${escXml(x.role||'Role')}</b> — <b style="color:#B98B4E;">${escXml(x.company||'Company')}</b> &nbsp; <span style="font-family:'Courier New',monospace;font-size:9pt;color:#5B6472;">(${escXml(x.start||'')} – ${escXml(x.end||'')})</span></p>`;
-      const bullets = bulletsToArray(x.bullets);
-      if(bullets.length){
-        body += '<ul style="margin:2px 0 0;padding-left:20px;font-size:10.5pt;line-height:1.5;">' + bullets.map(b=>`<li>${escXml(b)}</li>`).join('') + '</ul>';
-      }
+      paras.push(wPara(
+        wRun(`${x.role||'Role'} — `, { bold:true, size:22 }) +
+        wRun(x.company||'Company', { bold:true, size:22, color:'B98B4E' }) +
+        wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:'5B6472' }),
+        { spacingBefore:100 }
+      ));
+      bulletsToArray(x.bullets).forEach(b=>paras.push(bulletPara(b)));
     });
   }
 
   if(s.education.length){
-    body += wordSectionHeading('Education');
+    paras.push(sectionHeadingPara('Education'));
     s.education.forEach(x=>{
-      body += `<p style="margin:10px 0 2px;font-size:11pt;"><b>${escXml(x.degree||'Degree')}</b> — <b style="color:#B98B4E;">${escXml(x.school||'School')}</b> &nbsp; <span style="font-family:'Courier New',monospace;font-size:9pt;color:#5B6472;">(${escXml(x.start||'')} – ${escXml(x.end||'')})</span></p>`;
-      if(x.details){
-        body += `<ul style="margin:2px 0 0;padding-left:20px;font-size:10.5pt;line-height:1.5;"><li>${escXml(x.details)}</li></ul>`;
-      }
+      paras.push(wPara(
+        wRun(`${x.degree||'Degree'} — `, { bold:true, size:22 }) +
+        wRun(x.school||'School', { bold:true, size:22, color:'B98B4E' }) +
+        wRun(`   (${x.start||''} – ${x.end||''})`, { size:18, color:'5B6472' }),
+        { spacingBefore:100 }
+      ));
+      if(x.details) paras.push(bulletPara(x.details));
     });
   }
 
   if(s.skills.length){
-    body += wordSectionHeading('Skills');
-    body += `<p style="font-size:10.5pt;">${s.skills.map(escXml).join('&nbsp;&nbsp;·&nbsp;&nbsp;')}</p>`;
+    paras.push(sectionHeadingPara('Skills'));
+    paras.push(wPara(wRun(s.skills.join('   ·   '), { size:21 })));
   }
 
   if(s.courses.length){
-    body += wordSectionHeading('Courses &amp; Certifications');
+    paras.push(sectionHeadingPara('Courses & Certifications'));
     s.courses.forEach((x,i)=>{
-      body += `<p style="margin:6px 0;font-size:10.5pt;"><span style="font-family:'Courier New',monospace;color:#B98B4E;">CRS.${String(i+1).padStart(2,'0')}</span> &nbsp; <b>${escXml(x.name||'Course')}</b> — <span style="color:#5B6472;">${escXml(x.issuer||'')}, ${escXml(x.date||'')}</span></p>`;
+      paras.push(wPara(
+        wRun(`CRS.${String(i+1).padStart(2,'0')}   `, { font:'Courier New', size:18, color:'B98B4E' }) +
+        wRun(`${x.name||'Course'} — `, { bold:true, size:21 }) +
+        wRun(`${x.issuer||''}, ${x.date||''}`, { size:21, color:'5B6472' }),
+        { spacingBefore:60 }
+      ));
     });
   }
 
-  return `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-<head><meta charset="utf-8"><title>${escXml(s.fullName||'Resume')}</title>
-<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
-<style>
-  @page { size: 8.5in 11in; margin: 1in; }
-  body { font-family: Calibri, Arial, sans-serif; }
-</style>
-</head>
-<body>${body}</body>
-</html>`;
-}
+  const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:body>
+${paras.join('\n')}
+<w:sectPr>
+  <w:pgSz w:w="12240" w:h="15840"/>
+  <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/>
+</w:sectPr>
+</w:body>
+</w:document>`;
 
-function buildWordBlob(){
-  const html = buildWordHtml();
-  return new Blob(['\ufeff', html], { type: 'application/msword' });
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  ${imageBytes ? `<Default Extension="${imageExt}" ContentType="${imageContentType}"/>` : ''}
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`;
+
+  const rootRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`;
+
+  const docRelsXml = imageBytes ? `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.${imageExt}"/>
+</Relationships>` : null;
+
+  const encoder = new TextEncoder();
+  const files = [
+    { name:'[Content_Types].xml', data: encoder.encode(contentTypesXml) },
+    { name:'_rels/.rels', data: encoder.encode(rootRelsXml) },
+    { name:'word/document.xml', data: encoder.encode(documentXml) }
+  ];
+  if(imageBytes){
+    files.push({ name:'word/_rels/document.xml.rels', data: encoder.encode(docRelsXml) });
+    files.push({ name:`word/media/image1.${imageExt}`, data: imageBytes });
+  }
+
+  return buildZip(files);
 }
 
 function triggerDownload(blob, filename){
@@ -728,15 +912,15 @@ function triggerDownload(blob, filename){
 }
 
 async function downloadDocx(){
-  setStatus('Preparing your document…', 'ok');
+  setStatus('Preparing your .docx…', 'ok');
   try{
-    const blob = buildWordBlob();
-    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_Resume.doc';
+    const blob = await buildDocxBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_Resume.docx';
     triggerDownload(blob, filename);
-    setStatus('Downloaded: ' + filename + ' — opens in Word, Google Docs, or WPS Office.', 'ok');
+    setStatus('Downloaded: ' + filename, 'ok');
   }catch(e){
     console.error(e);
-    setStatus('Could not generate the document — ' + (e.message || 'see console for details.'), 'err');
+    setStatus('Could not generate the .docx — ' + (e.message || 'see console for details.'), 'err');
   }
 }
 
@@ -802,10 +986,10 @@ async function saveToFirebase(){
   }
   setStatus('Uploading to Firebase…', 'ok');
   try{
-    const blob = buildWordBlob();
-    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_' + Date.now() + '.doc';
+    const blob = await buildDocxBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_' + Date.now() + '.docx';
     const ref = fbStorage.ref().child('resumes/' + filename);
-    await ref.put(blob, { contentType:'application/msword' });
+    await ref.put(blob, { contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
     const url = await ref.getDownloadURL();
     await fbDb.collection('resumes').add({
       fullName: state.fullName || '',
