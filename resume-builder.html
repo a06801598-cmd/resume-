@@ -301,6 +301,21 @@ body{
   background:#A6402F; color:#fff; font-family:'IBM Plex Mono',monospace;
   font-size:12px; padding:10px 16px; line-height:1.5;
 }
+
+@media print{
+  @page{ size:auto; margin:0; }
+  body.printing > .app > .rail,
+  body.printing > .app > .stage > .sheet ~ *,
+  body.printing #libErrorBanner{ display:none !important; }
+  body.printing > .app{ display:block !important; }
+  body.printing .stage{
+    background:#fff !important; padding:0 !important; display:block !important;
+    max-height:none !important; overflow:visible !important;
+  }
+  body.printing .sheet{
+    box-shadow:none !important; margin:0 !important; width:100% !important; min-height:0 !important;
+  }
+}
 </style>
 </head>
 <body>
@@ -396,7 +411,8 @@ body{
     </div>
 
     <div class="actions">
-      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.docx)</button>
+      <button class="btn-primary" onclick="downloadPdf()">Download as PDF</button>
+      <button class="btn-secondary" onclick="downloadDocx()">Download as Word (.docx)</button>
       <button class="btn-secondary" onclick="saveToFirebase()">Save to Firebase</button>
       <div class="status-msg" id="statusMsg"></div>
     </div>
@@ -631,6 +647,15 @@ function renderPreview(){
         </div>
       </div>`;
   }
+}
+
+function downloadPdf(){
+  setStatus('Opening print dialog — choose "Save as PDF" as the destination.', 'ok');
+  document.body.classList.add('printing');
+  const cleanup = () => document.body.classList.remove('printing');
+  window.onafterprint = cleanup;
+  setTimeout(()=>{ window.print(); }, 50);
+  setTimeout(cleanup, 4000); // fallback in case onafterprint doesn't fire on this browser
 }
 
 /* ---------------- Word export: real .docx, hand-built, zero dependencies ----------------
