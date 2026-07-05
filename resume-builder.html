@@ -637,6 +637,13 @@ async function dataUrlToUint8(dataUrl){
   return new Uint8Array(buf);
 }
 
+function detectImageType(dataUrl){
+  const match = /^data:image\/(png|jpeg|jpg|gif|bmp);/i.exec(dataUrl || '');
+  if(!match) return 'png';
+  const t = match[1].toLowerCase();
+  return t === 'jpeg' ? 'jpg' : t;
+}
+
 async function buildDocxBlob(){
   const { Document, Packer, Paragraph, TextRun, ImageRun, BorderStyle, AlignmentType } = docx;
   const s = state;
@@ -645,11 +652,14 @@ async function buildDocxBlob(){
   if(s.photo){
     try{
       const imgData = await dataUrlToUint8(s.photo);
+      const imgType = detectImageType(s.photo);
       children.push(new Paragraph({
         alignment: AlignmentType.CENTER,
-        children:[ new ImageRun({ data: imgData, transformation:{ width:110, height:110 } }) ]
+        children:[ new ImageRun({ data: imgData, type: imgType, transformation:{ width:110, height:110 } }) ]
       }));
-    }catch(e){ /* skip photo if it fails to decode */ }
+    }catch(e){
+      console.error('Photo embed failed, continuing without it:', e);
+    }
   }
 
   children.push(new Paragraph({
