@@ -396,7 +396,7 @@ body{
     </div>
 
     <div class="actions">
-      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.docx)</button>
+      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.doc)</button>
       <button class="btn-secondary" onclick="saveToFirebase()">Save to Firebase</button>
       <div class="status-msg" id="statusMsg"></div>
     </div>
@@ -633,144 +633,110 @@ function renderPreview(){
   }
 }
 
-/* ---------------- DOCX export ---------------- */
-async function dataUrlToUint8(dataUrl){
-  const res = await fetch(dataUrl);
-  const buf = await res.arrayBuffer();
-  return new Uint8Array(buf);
+/* ---------------- Word export (self-contained, no external library) ----------------
+   This builds a Word-compatible HTML document (the same technique Word itself uses
+   when you "Save As > Web Page"). It opens perfectly in Word, Google Docs, and WPS —
+   fully editable — without depending on any CDN, so it can never fail from a blocked
+   script the way the old docx.js-based version could. */
+
+function escXml(s){
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function detectImageType(dataUrl){
-  const match = /^data:image\/(png|jpeg|jpg|gif|bmp);/i.exec(dataUrl || '');
-  if(!match) return 'png';
-  const t = match[1].toLowerCase();
-  return t === 'jpeg' ? 'jpg' : t;
+function wordSectionHeading(text){
+  return `<h2 style="font-family:'Courier New',monospace;font-size:11pt;letter-spacing:1px;text-transform:uppercase;color:#16233D;border-bottom:1px solid #DDD6C8;padding-bottom:4px;margin:20px 0 10px;">${escXml(text)}</h2>`;
 }
 
-let coreLibsPromise = null;
-function ensureCoreLibraries(){
-  if(!coreLibsPromise) coreLibsPromise = loadCoreLibraries().then(errs=>{ showLibErrors(errs); return errs; });
-  return coreLibsPromise;
-}
-
-async function buildDocxBlob(){
-  const loadErrors = await ensureCoreLibraries();
-  if(typeof docx === 'undefined'){
-    throw new Error((loadErrors && loadErrors[0]) || 'The docx library did not load. Check your internet connection, then reload the page.');
-  }
-  const { Document, Packer, Paragraph, TextRun, ImageRun, BorderStyle, AlignmentType } = docx;
+function buildWordHtml(){
   const s = state;
-  const children = [];
+  const contact = contactParts();
+  let body = '';
 
   if(s.photo){
-    try{
-      const imgData = await dataUrlToUint8(s.photo);
-      const imgType = detectImageType(s.photo);
-      children.push(new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children:[ new ImageRun({ data: imgData, type: imgType, transformation:{ width:110, height:110 } }) ]
-      }));
-    }catch(e){
-      console.error('Photo embed failed, continuing without it:', e);
-    }
+    body += `<div style="text-align:center;margin-bottom:14px;"><img src="${s.photo}" width="110" height="110" style="border-radius:50%;object-fit:cover;"></div>`;
   }
 
-  children.push(new Paragraph({
-    alignment: AlignmentType.CENTER,
-    children:[ new TextRun({ text: s.fullName || 'Your Name', bold:true, size:44, font:'Georgia' }) ]
-  }));
-  children.push(new Paragraph({
-    alignment: AlignmentType.CENTER,
-    children:[ new TextRun({ text: s.jobTitle || '', size:22, color:'B98B4E' }) ]
-  }));
-  const contact = contactParts();
+  body += `<h1 style="text-align:center;font-family:Georgia,serif;font-size:26pt;margin:0;color:#16233D;">${escXml(s.fullName||'Your Name')}</h1>`;
+  body += `<p style="text-align:center;font-family:'Courier New',monospace;font-size:10.5pt;letter-spacing:1px;text-transform:uppercase;color:#B98B4E;margin:6px 0 12px;">${escXml(s.jobTitle||'')}</p>`;
+
   if(contact.length){
-    children.push(new Paragraph({
-      alignment: AlignmentType.CENTER,
-      border:{ top:{style:BorderStyle.SINGLE,size:4,color:'16233D'}, bottom:{style:BorderStyle.SINGLE,size:4,color:'16233D'} },
-      spacing:{ before:120, after:200 },
-      children:[ new TextRun({ text: contact.join('   ·   '), size:20, color:'5B6472' }) ]
-    }));
+    body += `<p style="text-align:center;font-size:10pt;color:#5B6472;border-top:1px solid #16233D;border-bottom:1px solid #16233D;padding:8px 0;margin:0 0 16px;">${contact.map(escXml).join('&nbsp;&nbsp;·&nbsp;&nbsp;')}</p>`;
   }
   if(s.summary){
-    children.push(new Paragraph({ spacing:{after:200}, children:[ new TextRun({ text:s.summary, size:22 }) ] }));
-  }
-
-  function sectionHeading(text){
-    children.push(new Paragraph({
-      spacing:{ before:240, after:120 },
-      border:{ bottom:{ style:BorderStyle.SINGLE, size:4, color:'DDD6C8' } },
-      children:[ new TextRun({ text: text.toUpperCase(), bold:true, size:20, color:'16233D', font:'Courier New' }) ]
-    }));
+    body += `<p style="font-size:11pt;line-height:1.5;color:#222;margin:0 0 16px;">${escXml(s.summary)}</p>`;
   }
 
   if(s.experience.length){
-    sectionHeading('Experience');
+    body += wordSectionHeading('Experience');
     s.experience.forEach(x=>{
-      children.push(new Paragraph({
-        spacing:{before:100},
-        children:[
-          new TextRun({ text:`${x.role||'Role'} — `, bold:true, size:22 }),
-          new TextRun({ text:x.company||'Company', bold:true, size:22, color:'B98B4E' }),
-          new TextRun({ text:`   (${x.start||''} – ${x.end||''})`, size:18, color:'5B6472' })
-        ]
-      }));
-      bulletsToArray(x.bullets).forEach(b=>{
-        children.push(new Paragraph({ bullet:{level:0}, children:[ new TextRun({ text:b, size:21 }) ] }));
-      });
+      body += `<p style="margin:10px 0 2px;font-size:11pt;"><b>${escXml(x.role||'Role')}</b> — <b style="color:#B98B4E;">${escXml(x.company||'Company')}</b> &nbsp; <span style="font-family:'Courier New',monospace;font-size:9pt;color:#5B6472;">(${escXml(x.start||'')} – ${escXml(x.end||'')})</span></p>`;
+      const bullets = bulletsToArray(x.bullets);
+      if(bullets.length){
+        body += '<ul style="margin:2px 0 0;padding-left:20px;font-size:10.5pt;line-height:1.5;">' + bullets.map(b=>`<li>${escXml(b)}</li>`).join('') + '</ul>';
+      }
     });
   }
 
   if(s.education.length){
-    sectionHeading('Education');
+    body += wordSectionHeading('Education');
     s.education.forEach(x=>{
-      children.push(new Paragraph({
-        spacing:{before:100},
-        children:[
-          new TextRun({ text:`${x.degree||'Degree'} — `, bold:true, size:22 }),
-          new TextRun({ text:x.school||'School', bold:true, size:22, color:'B98B4E' }),
-          new TextRun({ text:`   (${x.start||''} – ${x.end||''})`, size:18, color:'5B6472' })
-        ]
-      }));
+      body += `<p style="margin:10px 0 2px;font-size:11pt;"><b>${escXml(x.degree||'Degree')}</b> — <b style="color:#B98B4E;">${escXml(x.school||'School')}</b> &nbsp; <span style="font-family:'Courier New',monospace;font-size:9pt;color:#5B6472;">(${escXml(x.start||'')} – ${escXml(x.end||'')})</span></p>`;
       if(x.details){
-        children.push(new Paragraph({ bullet:{level:0}, children:[ new TextRun({ text:x.details, size:21 }) ] }));
+        body += `<ul style="margin:2px 0 0;padding-left:20px;font-size:10.5pt;line-height:1.5;"><li>${escXml(x.details)}</li></ul>`;
       }
     });
   }
 
   if(s.skills.length){
-    sectionHeading('Skills');
-    children.push(new Paragraph({ children:[ new TextRun({ text:s.skills.join('  ·  '), size:21 }) ] }));
+    body += wordSectionHeading('Skills');
+    body += `<p style="font-size:10.5pt;">${s.skills.map(escXml).join('&nbsp;&nbsp;·&nbsp;&nbsp;')}</p>`;
   }
 
   if(s.courses.length){
-    sectionHeading('Courses & Certifications');
+    body += wordSectionHeading('Courses &amp; Certifications');
     s.courses.forEach((x,i)=>{
-      children.push(new Paragraph({
-        spacing:{before:60},
-        children:[
-          new TextRun({ text:`CRS.${String(i+1).padStart(2,'0')}  `, font:'Courier New', size:18, color:'B98B4E' }),
-          new TextRun({ text:`${x.name||'Course'} — `, bold:true, size:21 }),
-          new TextRun({ text:`${x.issuer||''}, ${x.date||''}`, size:21, color:'5B6472' })
-        ]
-      }));
+      body += `<p style="margin:6px 0;font-size:10.5pt;"><span style="font-family:'Courier New',monospace;color:#B98B4E;">CRS.${String(i+1).padStart(2,'0')}</span> &nbsp; <b>${escXml(x.name||'Course')}</b> — <span style="color:#5B6472;">${escXml(x.issuer||'')}, ${escXml(x.date||'')}</span></p>`;
     });
   }
 
-  const doc = new Document({ sections:[{ properties:{}, children }] });
-  return await Packer.toBlob(doc);
+  return `<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset="utf-8"><title>${escXml(s.fullName||'Resume')}</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>100</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
+<style>
+  @page { size: 8.5in 11in; margin: 1in; }
+  body { font-family: Calibri, Arial, sans-serif; }
+</style>
+</head>
+<body>${body}</body>
+</html>`;
+}
+
+function buildWordBlob(){
+  const html = buildWordHtml();
+  return new Blob(['\ufeff', html], { type: 'application/msword' });
+}
+
+function triggerDownload(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
 }
 
 async function downloadDocx(){
-  setStatus('Preparing your .docx…', 'ok');
+  setStatus('Preparing your document…', 'ok');
   try{
-    const blob = await buildDocxBlob();
-    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_Resume.docx';
-    saveAs(blob, filename);
-    setStatus('Downloaded: ' + filename, 'ok');
+    const blob = buildWordBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_Resume.doc';
+    triggerDownload(blob, filename);
+    setStatus('Downloaded: ' + filename + ' — opens in Word, Google Docs, or WPS Office.', 'ok');
   }catch(e){
     console.error(e);
-    setStatus('Could not generate the .docx — ' + (e.message || 'see console for details.'), 'err');
+    setStatus('Could not generate the document — ' + (e.message || 'see console for details.'), 'err');
   }
 }
 
@@ -836,10 +802,10 @@ async function saveToFirebase(){
   }
   setStatus('Uploading to Firebase…', 'ok');
   try{
-    const blob = await buildDocxBlob();
-    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_' + Date.now() + '.docx';
+    const blob = buildWordBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_' + Date.now() + '.doc';
     const ref = fbStorage.ref().child('resumes/' + filename);
-    await ref.put(blob, { contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    await ref.put(blob, { contentType:'application/msword' });
     const url = await ref.getDownloadURL();
     await fbDb.collection('resumes').add({
       fullName: state.fullName || '',
@@ -856,55 +822,17 @@ async function saveToFirebase(){
   }
 }
 
-/* ---------------- Robust library loading with CDN fallbacks ---------------- */
-function loadScriptOnce(url){
-  return new Promise((resolve, reject)=>{
-    const s = document.createElement('script');
-    s.src = url;
-    s.onload = () => resolve(url);
-    s.onerror = () => reject(new Error('Failed: ' + url));
-    document.head.appendChild(s);
-  });
-}
-async function loadFromSources(sources){
-  let lastErr;
-  for(const url of sources){
-    try{ await loadScriptOnce(url); return true; }
-    catch(e){ lastErr = e; }
-  }
-  throw lastErr || new Error('All sources failed');
-}
-async function loadCoreLibraries(){
-  const errs = [];
-  try{
-    await loadFromSources([
-      'https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.cjs',
-      'https://unpkg.com/docx@8.5.0/build/index.umd.cjs',
-      'https://cdn.jsdelivr.net/npm/docx@8.2.0/build/index.umd.cjs'
-    ]);
-  }catch(e){ errs.push('docx library (Word export) could not load from any CDN — check your internet connection.'); }
-
-  try{
-    await loadFromSources([
-      'https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js',
-      'https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.min.js'
-    ]);
-  }catch(e){ errs.push('FileSaver library (Word export) could not load from any CDN.'); }
-
-  return errs;
-}
-
 /* ---------------- Init ---------------- */
-function showLibErrors(extraErrors){
+function showLibErrors(){
   const banner = document.getElementById('libErrorBanner');
-  const missing = extraErrors ? [...extraErrors] : [];
-  if(typeof firebase === 'undefined') missing.push('Firebase SDK did not load.');
+  const missing = [];
+  if(typeof firebase === 'undefined') missing.push('Firebase SDK did not load — Save to Firebase will not work until this loads (Word export is unaffected).');
   if(window.__libErrors && window.__libErrors.length){
     missing.push(...window.__libErrors);
   }
   if(missing.length){
     banner.className='lib-error-banner';
-    banner.innerHTML = '⚠ ' + missing.join(' · ') + ' — try reloading, switching networks (e.g. mobile data vs WiFi), or opening this page in a different browser.';
+    banner.innerHTML = '⚠ ' + missing.join(' · ') + ' — try reloading, switching networks, or a different browser.';
   } else {
     banner.className=''; banner.innerHTML='';
   }
@@ -919,7 +847,7 @@ addEducation();
 addCourse();
 setTemplate('ledger');
 autoConnectFirebase();
-ensureCoreLibraries();
+setTimeout(showLibErrors, 800);
 </script>
 </body>
 </html>
