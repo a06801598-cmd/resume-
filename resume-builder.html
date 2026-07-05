@@ -1,0 +1,848 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ledger — Resume Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- Word export -->
+<script src="https://unpkg.com/docx@8.5.0/build/index.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/1.3.8/FileSaver.min.js"></script>
+
+<!-- Firebase (compat, loaded once the user connects their own project) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<style>
+:root{
+  --ink:#16233D;
+  --parchment:#F7F4EE;
+  --gold:#B98B4E;
+  --slate:#5B6472;
+  --forest:#33463A;
+  --line:#DDD6C8;
+  --white:#FFFFFF;
+  --danger:#A6402F;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:#0F1522;
+  color:var(--ink);
+  font-family:'Inter',sans-serif;
+  min-height:100vh;
+}
+
+/* ---------- App shell ---------- */
+.app{
+  display:grid;
+  grid-template-columns:400px 1fr;
+  min-height:100vh;
+}
+@media (max-width: 980px){
+  .app{grid-template-columns:1fr; }
+}
+
+/* ---------- Left: control rail ---------- */
+.rail{
+  background:var(--parchment);
+  border-right:1px solid var(--line);
+  padding:28px 26px 60px;
+  overflow-y:auto;
+  max-height:100vh;
+}
+.rail-brand{
+  font-family:'Fraunces',serif;
+  font-size:22px;
+  font-weight:600;
+  letter-spacing:.2px;
+  color:var(--ink);
+  margin:0 0 2px;
+}
+.rail-sub{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:11px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  color:var(--gold);
+  margin:0 0 28px;
+}
+.tabs{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:22px;
+}
+.tab-btn{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:11px;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  background:transparent;
+  border:1px solid var(--line);
+  color:var(--slate);
+  padding:7px 11px;
+  cursor:pointer;
+  border-radius:2px;
+}
+.tab-btn.active{
+  background:var(--ink);
+  border-color:var(--ink);
+  color:var(--parchment);
+}
+.panel{display:none;}
+.panel.active{display:block; animation:fade .15s ease;}
+@keyframes fade{from{opacity:0} to{opacity:1}}
+
+.field{margin-bottom:14px;}
+.field label{
+  display:block;
+  font-family:'IBM Plex Mono',monospace;
+  font-size:10px;
+  letter-spacing:.07em;
+  text-transform:uppercase;
+  color:var(--slate);
+  margin-bottom:6px;
+}
+.field input[type=text],
+.field input[type=email],
+.field input[type=tel],
+.field input[type=url],
+.field input[type=date],
+.field textarea{
+  width:100%;
+  border:1px solid var(--line);
+  background:var(--white);
+  padding:9px 10px;
+  font-family:'Inter',sans-serif;
+  font-size:13.5px;
+  color:var(--ink);
+  border-radius:2px;
+}
+.field textarea{resize:vertical; min-height:60px; line-height:1.45;}
+.field input:focus, .field textarea:focus{outline:2px solid var(--gold); outline-offset:0;}
+.row2{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+
+.entry-card{
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.55);
+  padding:14px;
+  margin-bottom:12px;
+  border-radius:3px;
+  position:relative;
+}
+.entry-card .rm{
+  position:absolute; top:10px; right:10px;
+  background:none; border:none; color:var(--danger);
+  font-family:'IBM Plex Mono',monospace; font-size:10px;
+  letter-spacing:.05em; cursor:pointer; text-transform:uppercase;
+}
+.add-btn{
+  width:100%;
+  background:var(--white);
+  border:1px dashed var(--slate);
+  color:var(--ink);
+  font-family:'IBM Plex Mono',monospace;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  padding:10px;
+  cursor:pointer;
+  border-radius:2px;
+  margin-bottom:6px;
+}
+.add-btn:hover{border-color:var(--gold); color:var(--gold);}
+
+.photo-drop{
+  display:flex; align-items:center; gap:14px; margin-bottom:16px;
+}
+.photo-preview{
+  width:64px; height:64px; border-radius:50%;
+  background:var(--white) center/cover no-repeat;
+  border:1px solid var(--line);
+  flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-family:'IBM Plex Mono',monospace; font-size:9px; color:var(--slate); text-align:center;
+}
+.file-btn{
+  font-family:'IBM Plex Mono',monospace;
+  font-size:11px; text-transform:uppercase; letter-spacing:.05em;
+  border:1px solid var(--ink); background:var(--ink); color:var(--parchment);
+  padding:8px 12px; cursor:pointer; border-radius:2px;
+}
+.file-btn.ghost{background:transparent; color:var(--ink);}
+
+.chips{display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px;}
+.chip{
+  background:var(--ink); color:var(--parchment);
+  font-size:12px; padding:5px 10px 5px 12px;
+  border-radius:20px; display:flex; align-items:center; gap:6px;
+}
+.chip button{background:none; border:none; color:var(--gold); cursor:pointer; font-size:13px; line-height:1;}
+
+.tpl-grid{display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:20px;}
+.tpl-opt{
+  border:1px solid var(--line); background:var(--white); padding:10px 6px;
+  cursor:pointer; text-align:center; border-radius:3px;
+}
+.tpl-opt.active{border-color:var(--gold); box-shadow:0 0 0 1px var(--gold) inset;}
+.tpl-opt .swatch{height:38px; margin-bottom:6px; border-radius:2px;}
+.tpl-opt span{font-family:'IBM Plex Mono',monospace; font-size:9.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--slate);}
+
+.swatch.ledger{background:linear-gradient(90deg,#16233D 4px,#F7F4EE 0);}
+.swatch.meridian{background:linear-gradient(90deg,#16233D 40%,#F7F4EE 0);}
+.swatch.foundry{background:linear-gradient(180deg,#33463A 34%,#F7F4EE 0);}
+
+.divider{height:1px; background:var(--line); margin:22px 0;}
+
+.actions{
+  position:sticky; bottom:-1px; background:var(--parchment);
+  padding-top:18px; margin-top:6px; border-top:1px solid var(--line);
+}
+.btn-primary{
+  width:100%; background:var(--gold); border:none; color:var(--ink);
+  font-family:'IBM Plex Mono',monospace; font-weight:500; font-size:12.5px;
+  text-transform:uppercase; letter-spacing:.06em; padding:13px; cursor:pointer;
+  border-radius:2px; margin-bottom:8px;
+}
+.btn-secondary{
+  width:100%; background:transparent; border:1px solid var(--ink); color:var(--ink);
+  font-family:'IBM Plex Mono',monospace; font-size:12px;
+  text-transform:uppercase; letter-spacing:.06em; padding:12px; cursor:pointer;
+  border-radius:2px; margin-bottom:8px;
+}
+.status-msg{font-family:'IBM Plex Mono',monospace; font-size:11px; margin-top:6px; min-height:14px;}
+.status-msg.ok{color:#2C6E49;}
+.status-msg.err{color:var(--danger);}
+
+/* Firebase config panel */
+.fb-box{border:1px solid var(--line); background:var(--white); padding:12px; border-radius:3px; margin-bottom:10px;}
+.fb-box textarea{width:100%; min-height:90px; font-family:'IBM Plex Mono',monospace; font-size:11px; border:1px solid var(--line); padding:8px; border-radius:2px;}
+.fb-status{font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--slate); margin-top:6px;}
+
+/* ---------- Right: preview stage ---------- */
+.stage{
+  background:#0F1522;
+  display:flex; align-items:flex-start; justify-content:center;
+  padding:48px 32px; overflow-y:auto; max-height:100vh;
+}
+.sheet{
+  width:816px; min-height:1056px;
+  background:var(--white);
+  box-shadow:0 30px 70px rgba(0,0,0,.55);
+}
+
+/* ===== Template: LEDGER ===== */
+.sheet.ledger{ padding:56px 58px; font-family:'Inter',sans-serif; color:var(--ink); }
+.ledger .lname{ font-family:'Fraunces',serif; font-size:38px; font-weight:600; margin:0; letter-spacing:.2px;}
+.ledger .ltitle{ font-family:'IBM Plex Mono',monospace; font-size:12.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); margin:6px 0 14px;}
+.ledger .lcontact{ font-size:12px; color:var(--slate); display:flex; flex-wrap:wrap; gap:14px; border-top:1px solid var(--ink); border-bottom:1px solid var(--ink); padding:10px 0; margin-bottom:22px;}
+.ledger .lsummary{font-size:13.5px; line-height:1.6; color:#333; margin-bottom:24px;}
+.ledger h2.sect{ font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); border-bottom:1px solid var(--line); padding-bottom:6px; margin:0 0 12px;}
+.ledger .block{margin-bottom:16px;}
+.ledger .block .top{display:flex; justify-content:space-between; align-items:baseline; gap:12px;}
+.ledger .block .role{font-weight:700; font-size:14.5px;}
+.ledger .block .org{font-weight:500; color:var(--gold); font-size:13px;}
+.ledger .block .dates{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--slate); white-space:nowrap;}
+.ledger .block ul{margin:6px 0 0; padding-left:16px; font-size:13px; line-height:1.55; color:#333;}
+.ledger .skillrow{display:flex; flex-wrap:wrap; gap:8px;}
+.ledger .skillpill{border:1px solid var(--line); font-size:11.5px; padding:4px 10px; border-radius:20px; color:var(--ink);}
+.ledger .courserow{display:flex; gap:12px; align-items:baseline; margin-bottom:8px; font-size:13px;}
+.ledger .coursecode{font-family:'IBM Plex Mono',monospace; font-size:10.5px; color:var(--gold); width:52px; flex-shrink:0;}
+.ledger .courseissuer{color:var(--slate); font-size:12px;}
+.ledger .two{display:grid; grid-template-columns:1fr 1fr; gap:36px;}
+
+/* ===== Template: MERIDIAN (photo sidebar) ===== */
+.sheet.meridian{ display:grid; grid-template-columns:270px 1fr; font-family:'Inter',sans-serif; min-height:1056px;}
+.meridian .side{background:var(--ink); color:var(--parchment); padding:44px 30px;}
+.meridian .photo{width:118px; height:118px; border-radius:50%; background:#28395C center/cover no-repeat; margin-bottom:20px; border:3px solid var(--gold);}
+.meridian .mname{font-family:'Fraunces',serif; font-size:25px; font-weight:600; margin:0 0 4px; line-height:1.2;}
+.meridian .mtitle{font-family:'IBM Plex Mono',monospace; font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--gold); margin-bottom:22px;}
+.meridian .mcontact div{font-size:11.5px; margin-bottom:8px; color:#D9DDE6; word-break:break-word;}
+.meridian .side h3{font-family:'IBM Plex Mono',monospace; font-size:10.5px; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); border-top:1px solid #33456B; padding-top:16px; margin:22px 0 10px;}
+.meridian .side .skillpill{display:inline-block; font-size:11px; border:1px solid #3C4E77; padding:4px 9px; border-radius:14px; margin:0 5px 5px 0; color:#D9DDE6;}
+.meridian .main{padding:46px 40px;}
+.meridian h2.sect{font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink); border-bottom:2px solid var(--gold); display:inline-block; padding-bottom:5px; margin:0 0 14px;}
+.meridian .summary{font-size:13.5px; line-height:1.6; color:#333; margin-bottom:26px;}
+.meridian .block{margin-bottom:18px;}
+.meridian .block .role{font-weight:700; font-size:14.5px; color:var(--ink);}
+.meridian .block .org{color:var(--gold); font-weight:500; font-size:13px;}
+.meridian .block .dates{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--slate);}
+.meridian .block ul{margin:6px 0 0; padding-left:16px; font-size:13px; line-height:1.55; color:#333;}
+.meridian .courserow{margin-bottom:8px; font-size:13px;}
+.meridian .courserow b{color:var(--ink);}
+.meridian .courserow span{color:var(--slate); font-size:12px;}
+
+/* ===== Template: FOUNDRY (bold header band) ===== */
+.sheet.foundry{font-family:'Inter',sans-serif; min-height:1056px;}
+.foundry .band{background:var(--forest); color:var(--parchment); padding:40px 50px; display:flex; align-items:center; gap:24px;}
+.foundry .photo{width:96px; height:96px; border-radius:8px; background:#465B49 center/cover no-repeat; border:2px solid var(--gold); flex-shrink:0;}
+.foundry .fname{font-family:'Fraunces',serif; font-size:32px; font-weight:600; margin:0;}
+.foundry .ftitle{font-family:'IBM Plex Mono',monospace; font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--gold); margin-top:6px;}
+.foundry .fcontact{margin-top:12px; font-size:11.5px; color:#DCE3D9; display:flex; flex-wrap:wrap; gap:14px;}
+.foundry .body{padding:36px 50px;}
+.foundry .summary{font-size:13.5px; line-height:1.6; color:#333; margin-bottom:22px; border-left:3px solid var(--gold); padding-left:14px;}
+.foundry h2.sect{font-family:'IBM Plex Mono',monospace; font-size:11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--forest); margin:0 0 12px;}
+.foundry .block{margin-bottom:16px;}
+.foundry .block .top{display:flex; justify-content:space-between; align-items:baseline;}
+.foundry .block .role{font-weight:700; font-size:14.5px;}
+.foundry .block .org{color:var(--forest); font-weight:500; font-size:13px;}
+.foundry .block .dates{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--slate);}
+.foundry .block ul{margin:6px 0 0; padding-left:16px; font-size:13px; line-height:1.55; color:#333;}
+.foundry .two{display:grid; grid-template-columns:1fr 1fr; gap:36px;}
+.foundry .skillpill{border:1px solid var(--line); font-size:11.5px; padding:4px 10px; border-radius:3px; color:var(--forest); display:inline-block; margin:0 6px 6px 0;}
+.foundry .courserow{margin-bottom:8px; font-size:13px;}
+.foundry .courserow b{color:var(--forest);}
+.foundry .courserow span{color:var(--slate); font-size:12px;}
+
+.muted-placeholder{color:#9AA0AC; font-style:italic;}
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- ============ LEFT RAIL ============ -->
+  <div class="rail">
+    <p class="rail-brand">Ledger</p>
+    <p class="rail-sub">Résumé Builder · v1</p>
+
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="profile" onclick="showTab('profile')">Profile</button>
+      <button class="tab-btn" data-tab="experience" onclick="showTab('experience')">Experience</button>
+      <button class="tab-btn" data-tab="education" onclick="showTab('education')">Education</button>
+      <button class="tab-btn" data-tab="skills" onclick="showTab('skills')">Skills</button>
+      <button class="tab-btn" data-tab="courses" onclick="showTab('courses')">Courses</button>
+      <button class="tab-btn" data-tab="design" onclick="showTab('design')">Design</button>
+      <button class="tab-btn" data-tab="cloud" onclick="showTab('cloud')">Firebase</button>
+    </div>
+
+    <!-- PROFILE -->
+    <div class="panel active" id="panel-profile">
+      <div class="photo-drop">
+        <div class="photo-preview" id="photoPreview">No photo</div>
+        <div>
+          <input type="file" id="photoInput" accept="image/*" style="display:none" onchange="handlePhoto(event)">
+          <button class="file-btn" onclick="document.getElementById('photoInput').click()">Upload photo</button>
+          <button class="file-btn ghost" onclick="removePhoto()">Remove</button>
+        </div>
+      </div>
+      <div class="field"><label>Full name</label><input type="text" oninput="update('fullName',this.value)" value="Mark Joseph C. Bravo" placeholder="Juan Dela Cruz"></div>
+      <div class="field"><label>Target role / title</label><input type="text" oninput="update('jobTitle',this.value)" value="Web Developer · IT Graduate" placeholder="e.g. Web Developer"></div>
+      <div class="row2">
+        <div class="field"><label>Email</label><input type="email" oninput="update('email',this.value)" placeholder="you@email.com"></div>
+        <div class="field"><label>Phone</label><input type="tel" oninput="update('phone',this.value)" placeholder="+63 900 000 0000"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Location</label><input type="text" oninput="update('location',this.value)" placeholder="Manaoag, Pangasinan"></div>
+        <div class="field"><label>Portfolio / LinkedIn</label><input type="text" oninput="update('website',this.value)" placeholder="linkedin.com/in/you"></div>
+      </div>
+      <div class="field"><label>Professional summary</label><textarea oninput="update('summary',this.value)" placeholder="2–3 sentences on who you are and what you bring."></textarea></div>
+    </div>
+
+    <!-- EXPERIENCE -->
+    <div class="panel" id="panel-experience">
+      <div id="experienceList"></div>
+      <button class="add-btn" onclick="addExperience()">+ Add experience / OJT</button>
+    </div>
+
+    <!-- EDUCATION -->
+    <div class="panel" id="panel-education">
+      <div id="educationList"></div>
+      <button class="add-btn" onclick="addEducation()">+ Add education</button>
+    </div>
+
+    <!-- SKILLS -->
+    <div class="panel" id="panel-skills">
+      <div class="field">
+        <label>Skills (press Enter to add)</label>
+        <input type="text" id="skillInput" placeholder="e.g. JavaScript" onkeydown="if(event.key==='Enter'){event.preventDefault(); addSkill(this.value); this.value='';}">
+      </div>
+      <div class="chips" id="skillChips"></div>
+    </div>
+
+    <!-- COURSES -->
+    <div class="panel" id="panel-courses">
+      <div id="courseList"></div>
+      <button class="add-btn" onclick="addCourse()">+ Add course / certification</button>
+    </div>
+
+    <!-- DESIGN -->
+    <div class="panel" id="panel-design">
+      <label style="font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--slate);">Layout</label>
+      <div class="tpl-grid" style="margin-top:8px;">
+        <div class="tpl-opt active" data-tpl="ledger" onclick="setTemplate('ledger')"><div class="swatch ledger"></div><span>Ledger</span></div>
+        <div class="tpl-opt" data-tpl="meridian" onclick="setTemplate('meridian')"><div class="swatch meridian"></div><span>Meridian</span></div>
+        <div class="tpl-opt" data-tpl="foundry" onclick="setTemplate('foundry')"><div class="swatch foundry"></div><span>Foundry</span></div>
+      </div>
+      <p style="font-size:12px;color:var(--slate);line-height:1.5;">Ledger — transcript-style, single column.<br>Meridian — dark sidebar with photo.<br>Foundry — bold header band, photo top-left.</p>
+    </div>
+
+    <!-- FIREBASE -->
+    <div class="panel" id="panel-cloud">
+      <div class="fb-box">
+        <label style="font-family:'IBM Plex Mono',monospace;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:var(--slate);display:block;margin-bottom:8px;">Paste your Firebase config (from Firebase Console → Project settings → SDK setup)</label>
+        <textarea id="fbConfigInput" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}'></textarea>
+        <button class="btn-secondary" style="margin-top:8px;" onclick="connectFirebase()">Connect Firebase</button>
+        <div class="fb-status" id="fbStatus">Not connected. Your résumé stays on this device until you connect.</div>
+      </div>
+      <p style="font-size:11.5px;color:var(--slate);line-height:1.5;">Uploads go to Storage under <code>resumes/</code> and an index entry is written to a Firestore collection called <code>resumes</code>. Make sure your Storage/Firestore security rules allow the write you intend (test-mode rules are fine for personal use, but lock them down before sharing the link).</p>
+    </div>
+
+    <div class="actions">
+      <button class="btn-primary" onclick="downloadDocx()">Download as Word (.docx)</button>
+      <button class="btn-secondary" onclick="saveToFirebase()">Save to Firebase</button>
+      <div class="status-msg" id="statusMsg"></div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: PREVIEW ============ -->
+  <div class="stage">
+    <div class="sheet ledger" id="sheet"></div>
+  </div>
+
+</div>
+
+<script>
+/* ---------------- State ---------------- */
+const state = {
+  template:'ledger',
+  photo:null,
+  fullName:'Mark Joseph C. Bravo',
+  jobTitle:'Web Developer · IT Graduate',
+  email:'', phone:'', location:'', website:'',
+  summary:'',
+  experience:[],
+  education:[],
+  skills:[],
+  courses:[]
+};
+
+function update(field, value){ state[field]=value; renderPreview(); }
+
+function showTab(name){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('active', b.dataset.tab===name));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('active', p.id==='panel-'+name));
+}
+
+/* ---------------- Photo ---------------- */
+function handlePhoto(e){
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    state.photo = reader.result;
+    document.getElementById('photoPreview').style.backgroundImage = `url(${state.photo})`;
+    document.getElementById('photoPreview').textContent='';
+    renderPreview();
+  };
+  reader.readAsDataURL(file);
+}
+function removePhoto(){
+  state.photo=null;
+  const pv=document.getElementById('photoPreview');
+  pv.style.backgroundImage='none'; pv.textContent='No photo';
+  renderPreview();
+}
+
+/* ---------------- Experience ---------------- */
+function addExperience(){
+  state.experience.push({role:'',company:'',start:'',end:'',bullets:''});
+  renderExperienceForm(); renderPreview();
+}
+function removeExperience(i){ state.experience.splice(i,1); renderExperienceForm(); renderPreview(); }
+function renderExperienceForm(){
+  const el = document.getElementById('experienceList');
+  el.innerHTML = state.experience.map((x,i)=>`
+    <div class="entry-card">
+      <button class="rm" onclick="removeExperience(${i})">Remove</button>
+      <div class="field"><label>Role</label><input type="text" value="${esc(x.role)}" oninput="state.experience[${i}].role=this.value; renderPreview();" placeholder="e.g. Web Developer Intern"></div>
+      <div class="field"><label>Company / Office</label><input type="text" value="${esc(x.company)}" oninput="state.experience[${i}].company=this.value; renderPreview();" placeholder="e.g. City Agriculture Office"></div>
+      <div class="row2">
+        <div class="field"><label>Start</label><input type="text" value="${esc(x.start)}" oninput="state.experience[${i}].start=this.value; renderPreview();" placeholder="Jan 2025"></div>
+        <div class="field"><label>End</label><input type="text" value="${esc(x.end)}" oninput="state.experience[${i}].end=this.value; renderPreview();" placeholder="Present"></div>
+      </div>
+      <div class="field"><label>Highlights (one per line)</label><textarea oninput="state.experience[${i}].bullets=this.value; renderPreview();" placeholder="Led development of...&#10;Coordinated with...">${esc(x.bullets)}</textarea></div>
+    </div>
+  `).join('');
+}
+
+/* ---------------- Education ---------------- */
+function addEducation(){
+  state.education.push({school:'',degree:'',start:'',end:'',details:''});
+  renderEducationForm(); renderPreview();
+}
+function removeEducation(i){ state.education.splice(i,1); renderEducationForm(); renderPreview(); }
+function renderEducationForm(){
+  const el = document.getElementById('educationList');
+  el.innerHTML = state.education.map((x,i)=>`
+    <div class="entry-card">
+      <button class="rm" onclick="removeEducation(${i})">Remove</button>
+      <div class="field"><label>School</label><input type="text" value="${esc(x.school)}" oninput="state.education[${i}].school=this.value; renderPreview();" placeholder="Urdaneta City University"></div>
+      <div class="field"><label>Degree / Program</label><input type="text" value="${esc(x.degree)}" oninput="state.education[${i}].degree=this.value; renderPreview();" placeholder="BS Information Technology"></div>
+      <div class="row2">
+        <div class="field"><label>Start</label><input type="text" value="${esc(x.start)}" oninput="state.education[${i}].start=this.value; renderPreview();" placeholder="2022"></div>
+        <div class="field"><label>End</label><input type="text" value="${esc(x.end)}" oninput="state.education[${i}].end=this.value; renderPreview();" placeholder="2026"></div>
+      </div>
+      <div class="field"><label>Notes (thesis, honors, GPA)</label><input type="text" value="${esc(x.details)}" oninput="state.education[${i}].details=this.value; renderPreview();" placeholder="Capstone: AGRICARE"></div>
+    </div>
+  `).join('');
+}
+
+/* ---------------- Skills ---------------- */
+function addSkill(v){
+  v = v.trim(); if(!v) return;
+  state.skills.push(v); renderSkillChips(); renderPreview();
+}
+function removeSkill(i){ state.skills.splice(i,1); renderSkillChips(); renderPreview(); }
+function renderSkillChips(){
+  document.getElementById('skillChips').innerHTML = state.skills.map((s,i)=>
+    `<div class="chip">${esc(s)} <button onclick="removeSkill(${i})">×</button></div>`).join('');
+}
+
+/* ---------------- Courses / Certifications ---------------- */
+function addCourse(){
+  state.courses.push({name:'',issuer:'',date:''});
+  renderCourseForm(); renderPreview();
+}
+function removeCourse(i){ state.courses.splice(i,1); renderCourseForm(); renderPreview(); }
+function renderCourseForm(){
+  const el = document.getElementById('courseList');
+  el.innerHTML = state.courses.map((x,i)=>`
+    <div class="entry-card">
+      <button class="rm" onclick="removeCourse(${i})">Remove</button>
+      <div class="field"><label>Course / Certification</label><input type="text" value="${esc(x.name)}" oninput="state.courses[${i}].name=this.value; renderPreview();" placeholder="e.g. Full-Stack Web Development"></div>
+      <div class="row2">
+        <div class="field"><label>Issuer / Platform</label><input type="text" value="${esc(x.issuer)}" oninput="state.courses[${i}].issuer=this.value; renderPreview();" placeholder="e.g. Coursera / TESDA"></div>
+        <div class="field"><label>Date</label><input type="text" value="${esc(x.date)}" oninput="state.courses[${i}].date=this.value; renderPreview();" placeholder="2025"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+/* ---------------- Template switch ---------------- */
+function setTemplate(t){
+  state.template = t;
+  document.querySelectorAll('.tpl-opt').forEach(o=>o.classList.toggle('active', o.dataset.tpl===t));
+  const sheet = document.getElementById('sheet');
+  sheet.className = 'sheet ' + t;
+  renderPreview();
+}
+
+/* ---------------- Helpers ---------------- */
+function esc(s){ return (s||'').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function bulletsToLi(text){
+  return (text||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>`<li>${escHtml(l)}</li>`).join('');
+}
+function bulletsToArray(text){
+  return (text||'').split('\n').map(l=>l.trim()).filter(Boolean);
+}
+function escHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function contactParts(){
+  return [state.email, state.phone, state.location, state.website].filter(Boolean);
+}
+
+/* ---------------- Preview render ---------------- */
+function renderPreview(){
+  const sheet = document.getElementById('sheet');
+  const s = state;
+  const contact = contactParts();
+  const skillsHtml = s.skills.length ? s.skills.map(x=>`<span class="skillpill">${escHtml(x)}</span>`).join('') : `<span class="muted-placeholder">Add skills from the Skills tab</span>`;
+
+  const expHtml = s.experience.length ? s.experience.map(x=>`
+    <div class="block">
+      <div class="top">
+        <div><span class="role">${escHtml(x.role||'Role')}</span> — <span class="org">${escHtml(x.company||'Company')}</span></div>
+        <div class="dates">${escHtml(x.start||'')} – ${escHtml(x.end||'')}</div>
+      </div>
+      <ul>${bulletsToLi(x.bullets)}</ul>
+    </div>`).join('') : `<p class="muted-placeholder">Add experience from the Experience tab</p>`;
+
+  const eduHtml = s.education.length ? s.education.map(x=>`
+    <div class="block">
+      <div class="top">
+        <div><span class="role">${escHtml(x.degree||'Degree')}</span> — <span class="org">${escHtml(x.school||'School')}</span></div>
+        <div class="dates">${escHtml(x.start||'')} – ${escHtml(x.end||'')}</div>
+      </div>
+      ${x.details?`<ul><li>${escHtml(x.details)}</li></ul>`:''}
+    </div>`).join('') : `<p class="muted-placeholder">Add education from the Education tab</p>`;
+
+  const courseHtml = s.courses.length ? s.courses.map((x,i)=>`
+    <div class="courserow">
+      <span class="coursecode">CRS.${String(i+1).padStart(2,'0')}</span>
+      <span><b>${escHtml(x.name||'Course title')}</b> — <span class="courseissuer">${escHtml(x.issuer||'Issuer')}, ${escHtml(x.date||'')}</span></span>
+    </div>`).join('') : `<p class="muted-placeholder">Add courses/certifications from the Courses tab</p>`;
+
+  const photoStyle = s.photo ? `background-image:url(${s.photo})` : '';
+
+  if(s.template==='ledger'){
+    sheet.innerHTML = `
+      <h1 class="lname">${escHtml(s.fullName||'Your Name')}</h1>
+      <p class="ltitle">${escHtml(s.jobTitle||'Target role')}</p>
+      <div class="lcontact">${contact.length?contact.map(escHtml).join(' &nbsp;·&nbsp; '):'<span class="muted-placeholder">Add contact info in Profile</span>'}</div>
+      ${s.summary?`<p class="lsummary">${escHtml(s.summary)}</p>`:''}
+      <h2 class="sect">Experience</h2>${expHtml}
+      <h2 class="sect">Education</h2>${eduHtml}
+      <div class="two">
+        <div><h2 class="sect">Skills</h2><div class="skillrow">${skillsHtml}</div></div>
+        <div><h2 class="sect">Courses &amp; Certifications</h2>${courseHtml}</div>
+      </div>`;
+  } else if(s.template==='meridian'){
+    sheet.innerHTML = `
+      <div class="side">
+        <div class="photo" style="${photoStyle}"></div>
+        <p class="mname">${escHtml(s.fullName||'Your Name')}</p>
+        <p class="mtitle">${escHtml(s.jobTitle||'Target role')}</p>
+        <div class="mcontact">${contact.map(c=>`<div>${escHtml(c)}</div>`).join('')}</div>
+        <h3>Skills</h3><div>${s.skills.map(x=>`<span class="skillpill">${escHtml(x)}</span>`).join('')||'<span class="muted-placeholder">—</span>'}</div>
+        <h3>Courses &amp; Certifications</h3>
+        ${s.courses.map(x=>`<div style="font-size:11.5px;margin-bottom:8px;color:#D9DDE6;"><b style="color:#fff;">${escHtml(x.name||'')}</b><br>${escHtml(x.issuer||'')}, ${escHtml(x.date||'')}</div>`).join('') || '<div class="muted-placeholder" style="color:#8FA0C4;">—</div>'}
+      </div>
+      <div class="main">
+        ${s.summary?`<h2 class="sect">Profile</h2><p class="summary">${escHtml(s.summary)}</p>`:''}
+        <h2 class="sect">Experience</h2>${expHtml}
+        <h2 class="sect">Education</h2>${eduHtml}
+      </div>`;
+  } else if(s.template==='foundry'){
+    sheet.innerHTML = `
+      <div class="band">
+        <div class="photo" style="${photoStyle}"></div>
+        <div>
+          <p class="fname">${escHtml(s.fullName||'Your Name')}</p>
+          <p class="ftitle">${escHtml(s.jobTitle||'Target role')}</p>
+          <div class="fcontact">${contact.map(escHtml).join(' &nbsp;·&nbsp; ')}</div>
+        </div>
+      </div>
+      <div class="body">
+        ${s.summary?`<p class="summary">${escHtml(s.summary)}</p>`:''}
+        <h2 class="sect">Experience</h2>${expHtml}
+        <div class="two">
+          <div><h2 class="sect">Education</h2>${eduHtml}</div>
+          <div>
+            <h2 class="sect">Skills</h2><div style="margin-bottom:16px;">${skillsHtml}</div>
+            <h2 class="sect">Courses &amp; Certifications</h2>${courseHtml}
+          </div>
+        </div>
+      </div>`;
+  }
+}
+
+/* ---------------- DOCX export ---------------- */
+async function dataUrlToUint8(dataUrl){
+  const res = await fetch(dataUrl);
+  const buf = await res.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+async function buildDocxBlob(){
+  const { Document, Packer, Paragraph, TextRun, ImageRun, BorderStyle, AlignmentType } = docx;
+  const s = state;
+  const children = [];
+
+  if(s.photo){
+    try{
+      const imgData = await dataUrlToUint8(s.photo);
+      children.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children:[ new ImageRun({ data: imgData, transformation:{ width:110, height:110 } }) ]
+      }));
+    }catch(e){ /* skip photo if it fails to decode */ }
+  }
+
+  children.push(new Paragraph({
+    alignment: AlignmentType.CENTER,
+    children:[ new TextRun({ text: s.fullName || 'Your Name', bold:true, size:44, font:'Georgia' }) ]
+  }));
+  children.push(new Paragraph({
+    alignment: AlignmentType.CENTER,
+    children:[ new TextRun({ text: s.jobTitle || '', size:22, color:'B98B4E' }) ]
+  }));
+  const contact = contactParts();
+  if(contact.length){
+    children.push(new Paragraph({
+      alignment: AlignmentType.CENTER,
+      border:{ top:{style:BorderStyle.SINGLE,size:4,color:'16233D'}, bottom:{style:BorderStyle.SINGLE,size:4,color:'16233D'} },
+      spacing:{ before:120, after:200 },
+      children:[ new TextRun({ text: contact.join('   ·   '), size:20, color:'5B6472' }) ]
+    }));
+  }
+  if(s.summary){
+    children.push(new Paragraph({ spacing:{after:200}, children:[ new TextRun({ text:s.summary, size:22 }) ] }));
+  }
+
+  function sectionHeading(text){
+    children.push(new Paragraph({
+      spacing:{ before:240, after:120 },
+      border:{ bottom:{ style:BorderStyle.SINGLE, size:4, color:'DDD6C8' } },
+      children:[ new TextRun({ text: text.toUpperCase(), bold:true, size:20, color:'16233D', font:'Courier New' }) ]
+    }));
+  }
+
+  if(s.experience.length){
+    sectionHeading('Experience');
+    s.experience.forEach(x=>{
+      children.push(new Paragraph({
+        spacing:{before:100},
+        children:[
+          new TextRun({ text:`${x.role||'Role'} — `, bold:true, size:22 }),
+          new TextRun({ text:x.company||'Company', bold:true, size:22, color:'B98B4E' }),
+          new TextRun({ text:`   (${x.start||''} – ${x.end||''})`, size:18, color:'5B6472' })
+        ]
+      }));
+      bulletsToArray(x.bullets).forEach(b=>{
+        children.push(new Paragraph({ bullet:{level:0}, children:[ new TextRun({ text:b, size:21 }) ] }));
+      });
+    });
+  }
+
+  if(s.education.length){
+    sectionHeading('Education');
+    s.education.forEach(x=>{
+      children.push(new Paragraph({
+        spacing:{before:100},
+        children:[
+          new TextRun({ text:`${x.degree||'Degree'} — `, bold:true, size:22 }),
+          new TextRun({ text:x.school||'School', bold:true, size:22, color:'B98B4E' }),
+          new TextRun({ text:`   (${x.start||''} – ${x.end||''})`, size:18, color:'5B6472' })
+        ]
+      }));
+      if(x.details){
+        children.push(new Paragraph({ bullet:{level:0}, children:[ new TextRun({ text:x.details, size:21 }) ] }));
+      }
+    });
+  }
+
+  if(s.skills.length){
+    sectionHeading('Skills');
+    children.push(new Paragraph({ children:[ new TextRun({ text:s.skills.join('  ·  '), size:21 }) ] }));
+  }
+
+  if(s.courses.length){
+    sectionHeading('Courses & Certifications');
+    s.courses.forEach((x,i)=>{
+      children.push(new Paragraph({
+        spacing:{before:60},
+        children:[
+          new TextRun({ text:`CRS.${String(i+1).padStart(2,'0')}  `, font:'Courier New', size:18, color:'B98B4E' }),
+          new TextRun({ text:`${x.name||'Course'} — `, bold:true, size:21 }),
+          new TextRun({ text:`${x.issuer||''}, ${x.date||''}`, size:21, color:'5B6472' })
+        ]
+      }));
+    });
+  }
+
+  const doc = new Document({ sections:[{ properties:{}, children }] });
+  return await Packer.toBlob(doc);
+}
+
+async function downloadDocx(){
+  setStatus('Preparing your .docx…', 'ok');
+  try{
+    const blob = await buildDocxBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_Resume.docx';
+    saveAs(blob, filename);
+    setStatus('Downloaded: ' + filename, 'ok');
+  }catch(e){
+    console.error(e);
+    setStatus('Could not generate the .docx — see console for details.', 'err');
+  }
+}
+
+function setStatus(msg, kind){
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg ' + (kind||'');
+}
+
+/* ---------------- Firebase ---------------- */
+// Baked-in config so the page connects automatically once hosted (e.g. on GitHub Pages).
+// This is safe to keep public — a Firebase web config is not a secret; your Storage/Firestore
+// rules are what actually control access. Set to null to require manual paste instead.
+const HARD_CODED_FIREBASE_CONFIG = {
+  apiKey: "AIzaSyBW4nIJvY4JVIsxWp8L9gGAbrh5CnVpCoY",
+  authDomain: "cvresume-915d3.firebaseapp.com",
+  projectId: "cvresume-915d3",
+  storageBucket: "cvresume-915d3.firebasestorage.app",
+  messagingSenderId: "879910498973",
+  appId: "1:879910498973:web:4faef5174e9de7ad669a74",
+  measurementId: "G-72WJ7TDG18"
+};
+
+let fbApp=null, fbStorage=null, fbDb=null;
+
+function initFirebaseWithConfig(config){
+  fbApp = firebase.initializeApp(config);
+  fbStorage = firebase.storage();
+  fbDb = firebase.firestore();
+}
+
+function autoConnectFirebase(){
+  if(!HARD_CODED_FIREBASE_CONFIG) return;
+  try{
+    initFirebaseWithConfig(HARD_CODED_FIREBASE_CONFIG);
+    document.getElementById('fbStatus').textContent = 'Connected to project: ' + (HARD_CODED_FIREBASE_CONFIG.projectId || 'unknown');
+    document.getElementById('fbConfigInput').placeholder = 'Already connected via built-in config. Paste a different config here to override.';
+  }catch(e){
+    console.error(e);
+    document.getElementById('fbStatus').textContent = 'Built-in config failed to connect — check console.';
+  }
+}
+
+function connectFirebase(){
+  const raw = document.getElementById('fbConfigInput').value.trim();
+  const fbStatusEl = document.getElementById('fbStatus');
+  if(!raw){ fbStatusEl.textContent='Paste your Firebase config JSON first.'; return; }
+  try{
+    const config = JSON.parse(raw);
+    initFirebaseWithConfig(config);
+    fbStatusEl.textContent = 'Connected to project: ' + (config.projectId || 'unknown');
+  }catch(e){
+    console.error(e);
+    fbStatusEl.textContent = 'Could not parse/connect — check the JSON and try again.';
+  }
+}
+
+async function saveToFirebase(){
+  if(!fbStorage || !fbDb){
+    setStatus('Connect Firebase first (Firebase tab).', 'err');
+    showTab('cloud');
+    return;
+  }
+  setStatus('Uploading to Firebase…', 'ok');
+  try{
+    const blob = await buildDocxBlob();
+    const filename = (state.fullName || 'Resume').trim().replace(/\s+/g,'_') + '_' + Date.now() + '.docx';
+    const ref = fbStorage.ref().child('resumes/' + filename);
+    await ref.put(blob, { contentType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const url = await ref.getDownloadURL();
+    await fbDb.collection('resumes').add({
+      fullName: state.fullName || '',
+      jobTitle: state.jobTitle || '',
+      template: state.template,
+      fileName: filename,
+      downloadUrl: url,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    setStatus('Saved to Firebase Storage + Firestore.', 'ok');
+  }catch(e){
+    console.error(e);
+    setStatus('Upload failed — check your Firebase rules/config.', 'err');
+  }
+}
+
+/* ---------------- Init ---------------- */
+renderExperienceForm();
+renderEducationForm();
+renderSkillChips();
+renderCourseForm();
+addExperience();
+addEducation();
+addCourse();
+setTemplate('ledger');
+autoConnectFirebase();
+</script>
+</body>
+</html>
